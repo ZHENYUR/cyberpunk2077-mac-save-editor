@@ -1,5 +1,7 @@
 """Python classes for reading chunks from a save file.
 
+Modified 2026 by ZHENYUR: added 0x200 to DataChunkTableChunk.VALID_CAPACITY
+to support Cyberpunk 2077 Mac native save files (FZLC capacity = 512).
 
 Copyright (c) 2022 Ali Farzanrad <ali_farzanrad@riseup.net>
 

@@ -394,33 +394,28 @@ def modify_player_level(savefile, new_level):
 
 def modify_quickhack_components(savefile, new_qty=999):
     """
-    ⚠️  实验性功能 - 后期存档可能损坏 ⚠️
+    修改 Quickhack 升级组件数量 (Tier 2 绿 / Tier 3 蓝 / Tier 4 紫 / Tier 5 橙).
 
-    在简单存档(早期游戏进度)上可能工作, 但在后期/复杂存档上
-    游戏会拒绝加载. 推测原因: CP2077 存档对 inventory 节点有
-    内部一致性检查, 修改单个 quantity 字段会破坏 checksum.
+    === inventory item 二进制结构 (来自 CyberCAT 源码 + 实测验证) ===
+    CP2077 inventory 是嵌套子节点树, 每个 item 由两部分组成:
+      [父预告头 NextItemEntry: TdbId(8) + Header(7) = 15 bytes]  ← 绝不能碰
+      [子节点 ItemData: NodeId(4) + TdbId(8) + Header(7) + Flags(1)
+                        + CreationTime(4) + Quantity(4) ...]
 
-    使用前**务必备份**, 如果游戏进不去, 用 backup_N.dat 恢复.
+    父 TdbId 和 子 TdbId 是同样的 hash, 在解压字节流里出现两次.
+    游戏加载时会断言"父预告头 == 子节点头"逐字节相等, 改错就拒绝加载.
 
-    修改 Quickhack 升级组件数量 (Tier 2 绿 / Tier 3 蓝 / Tier 4 紫).
+    真正的 quantity 在【第二个 hash (子节点 TdbId) + 21 字节】处.
+    (= 子节点 body offset 24 = TdbId8 + Header7 + Flags1 + CreationTime4)
 
-    Quickhack 组件以 inventory 中的 stackable item 存储:
+    关键: 只改这一个 quantity 字节, 绝不碰 NodeId / TdbId / Header,
+    否则破坏父子一致性检查或节点树, 游戏拒绝加载.
+
+    Quickhack 组件 TweakDBID:
       Items.QuickHackUncommonMaterial1  (Tier 2 绿)
       Items.QuickHackRareMaterial1      (Tier 3 蓝)
       Items.QuickHackEpicMaterial1      (Tier 4 紫)
-
-    Item entry 结构 (基于实验观察):
-      [8 bytes TweakDBID hash]
-      [8 bytes metadata (flags/length等)]
-      [4 bytes quantity uint32]   ← 在 hash+16 位置
-      [8 bytes hash 重复]
-      [8 bytes metadata 重复]
-      [4 bytes quantity 重复]      ← 在 hash+36 位置
-    两个 quantity 位置都需要修改.
-
-    注: 用绿色 Uncommon 组件实验确认 quantity 在 hash+16 (从 82 → 999 验证成功).
-
-    Tier 5 (Legendary 橙) 需要先在游戏里获得至少 1 个才能用此函数修改.
+      Items.QuickHackLegendaryMaterial1 (Tier 5 橙)
     """
     import binascii
 
@@ -448,7 +443,7 @@ def modify_quickhack_components(savefile, new_qty=999):
         crc = binascii.crc32(name) & 0xFFFFFFFF
         hash_bytes = struct.pack('<IB3x', crc, len(name))
 
-        # 在 inventory 字节里搜
+        # 在 inventory 字节里搜 hash (会出现两次: 父预告头 + 子节点)
         inv_bytes = bytes(data[inv_info.offset:inv_info.offset + inv_info.size])
         positions = []
         s = 0
@@ -459,26 +454,26 @@ def modify_quickhack_components(savefile, new_qty=999):
             positions.append(i)
             s = i + 1
 
-        if not positions:
-            changes.append(f"  ⚠️  {label}: 背包里没有, 跳过 (需先在游戏里获得 1 个)")
+        if len(positions) < 2:
+            changes.append(
+                f"  ⚠️  {label}: 背包里没有 (需先在游戏里获得至少 1 个)")
             continue
 
-        # 修改每个位置的 hash+16 quantity 字段
-        # (hash 出现 2 次, 第一次 +16 = quantity, 第二次 +16 = quantity 重复)
-        for p in positions:
-            abs_pos = inv_info.offset + p + 16
-            old = struct.unpack('<I', data[abs_pos:abs_pos + 4])[0]
-            data[abs_pos:abs_pos + 4] = struct.pack('<I', new_qty)
+        # 第二个 hash = 子节点 ItemData 的 TdbId
+        # quantity 在 子hash + 21 (= 子节点 body offset 24)
+        # 只改这一个字节, 不碰父预告头 / NodeId / TdbId / Header
+        child_hash = positions[1]
+        qty_pos = inv_info.offset + child_hash + 21
+        old = struct.unpack('<I', data[qty_pos:qty_pos + 4])[0]
 
-        old_first = struct.unpack(
-            '<I',
-            bytes(data[inv_info.offset + positions[0] + 4:
-                       inv_info.offset + positions[0] + 8])
-        )[0]
-        # 因为我们已经写入了新值, old_first 现在等于 new_qty
-        # 重新算 old 用第一次写入前的值（用 positions 数量 / 2 来推断）
-        # 这里简化: 直接报告改了几处
-        changes.append(f"  ✓ {label}: 改了 {len(positions)} 处 → {new_qty}")
+        # 安全检查: quantity 应该是合理的小数字 (避免改到错误字段)
+        if old > 100000:
+            changes.append(
+                f"  ⚠️  {label}: 位置值 {old} 异常, 跳过保护 (结构可能不同)")
+            continue
+
+        data[qty_pos:qty_pos + 4] = struct.pack('<I', new_qty)
+        changes.append(f"  ✓ {label}: {old} → {new_qty}")
 
     return changes
 
@@ -527,7 +522,7 @@ def interactive_menu(save_name):
         print("  [3] 专长点 (Primary)   改成 999")
         print("  [4] 街头声望           改成 50 (满级)")
         print("  [5] 玩家等级           改成 60 (满级)")
-        print("  [6] 快速破解组件       Tier 2/3/4 改成 999 ⚠️ 实验性")
+        print("  [6] 快速破解组件       Tier 2/3/4/5 改成 999")
         print("  [7] 一键全部拉满")
         print("  [0] 保存并退出")
         print("  [q] 不保存退出")

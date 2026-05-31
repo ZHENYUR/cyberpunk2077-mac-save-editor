@@ -31,6 +31,8 @@ SOFTWARE.
   - 未用属性点
   - 未用专长点 (Primary)
   - 街头声望 (Street Cred)
+  - 玩家等级
+  - 快速破解组件 (Quickhack Components) — Tier 2/3/4 数量
 
 用法:
   python3 edit_save.py              # 交互式菜单
@@ -390,6 +392,83 @@ def modify_player_level(savefile, new_level):
     return modify_proficiency_level(savefile, 'Level', new_level)
 
 
+def modify_quickhack_components(savefile, new_qty=999):
+    """
+    修改 Quickhack 升级组件数量 (Tier 2 绿 / Tier 3 蓝 / Tier 4 紫).
+
+    Quickhack 组件以 inventory 中的 stackable item 存储:
+      Items.QuickHackUncommonMaterial1  (Tier 2 绿)
+      Items.QuickHackRareMaterial1      (Tier 3 蓝)
+      Items.QuickHackEpicMaterial1      (Tier 4 紫)
+
+    Item entry 结构 (基于实验观察):
+      [8 bytes TweakDBID hash] [4 bytes quantity uint32] [4 bytes flag] ...
+      每个 item entry 在 inventory 字节里出现两次 (主条目 + stack 引用),
+      两个位置都需要修改, 否则游戏可能用其中一个值覆盖.
+
+    Tier 5 (Legendary 橙) 需要先在游戏里获得至少 1 个才能用此函数修改.
+    """
+    import binascii
+
+    components = [
+        ('Items.QuickHackUncommonMaterial1', 'Tier 2 (绿)'),
+        ('Items.QuickHackRareMaterial1', 'Tier 3 (蓝)'),
+        ('Items.QuickHackEpicMaterial1', 'Tier 4 (紫)'),
+        ('Items.QuickHackLegendaryMaterial1', 'Tier 5 (橙)'),
+    ]
+
+    # 找 inventory 节点
+    inv_info = None
+    for nid in range(len(savefile.nodes_info)):
+        if savefile.nodes_info[nid].name == b'inventory':
+            inv_info = savefile.nodes_info[nid]
+            break
+    if inv_info is None:
+        return ["⚠️  找不到 inventory 节点"]
+
+    data = savefile.data
+    changes = []
+
+    for name_str, label in components:
+        name = name_str.encode()
+        crc = binascii.crc32(name) & 0xFFFFFFFF
+        hash_bytes = struct.pack('<IB3x', crc, len(name))
+
+        # 在 inventory 字节里搜
+        inv_bytes = bytes(data[inv_info.offset:inv_info.offset + inv_info.size])
+        positions = []
+        s = 0
+        while True:
+            i = inv_bytes.find(hash_bytes, s)
+            if i < 0:
+                break
+            positions.append(i)
+            s = i + 1
+
+        if not positions:
+            changes.append(f"  ⚠️  {label}: 背包里没有, 跳过 (需先在游戏里获得 1 个)")
+            continue
+
+        # 修改每个位置的 hash+4 quantity 字段
+        for p in positions:
+            abs_pos = inv_info.offset + p + 4
+            old = struct.unpack('<I', data[abs_pos:abs_pos + 4])[0]
+            if old < 100000:  # sanity check
+                data[abs_pos:abs_pos + 4] = struct.pack('<I', new_qty)
+
+        old_first = struct.unpack(
+            '<I',
+            bytes(data[inv_info.offset + positions[0] + 4:
+                       inv_info.offset + positions[0] + 8])
+        )[0]
+        # 因为我们已经写入了新值, old_first 现在等于 new_qty
+        # 重新算 old 用第一次写入前的值（用 positions 数量 / 2 来推断）
+        # 这里简化: 直接报告改了几处
+        changes.append(f"  ✓ {label}: 改了 {len(positions)} 处 → {new_qty}")
+
+    return changes
+
+
 # ============================================================
 # 主程序
 # ============================================================
@@ -434,7 +513,8 @@ def interactive_menu(save_name):
         print("  [3] 专长点 (Primary)   改成 999")
         print("  [4] 街头声望           改成 50 (满级)")
         print("  [5] 玩家等级           改成 60 (满级)")
-        print("  [6] 一键全部拉满")
+        print("  [6] 快速破解组件       Tier 2/3/4 改成 999")
+        print("  [7] 一键全部拉满")
         print("  [0] 保存并退出")
         print("  [q] 不保存退出")
 
@@ -475,6 +555,10 @@ def interactive_menu(save_name):
             else:
                 print(f"✓ 玩家等级: {res[0]} → {res[1]}")
         elif choice == '6':
+            print("🧩 快速破解组件:")
+            for c in modify_quickhack_components(savefile, 999):
+                print(c)
+        elif choice == '7':
             r, e = modify_money(savefile, 9_999_999)
             print(f"💰 钱: {f'{r[0]} → {r[1]}' if r else '失败 - ' + e}")
             for c in modify_dev_points(savefile, attribute_unspent=999, perk_unspent=999):
@@ -483,6 +567,9 @@ def interactive_menu(save_name):
             print(f"🎖️  街头声望: {f'{r[0]} → {r[1]}' if r else '失败 - ' + e}")
             r, e = modify_player_level(savefile, 60)
             print(f"⭐ 玩家等级: {f'{r[0]} → {r[1]}' if r else '失败 - ' + e}")
+            print("🧩 快速破解组件:")
+            for c in modify_quickhack_components(savefile, 999):
+                print(c)
         else:
             print("无效选择")
 
@@ -503,6 +590,7 @@ def main():
     parser.add_argument('--perk', type=int, help='设置未用专长点数')
     parser.add_argument('--cred', type=int, help='设置街头声望 (上限 50)')
     parser.add_argument('--level', type=int, help='设置玩家等级 (上限 60)')
+    parser.add_argument('--quickhack', type=int, help='设置 Tier 2/3/4 快速破解组件数量')
     args = parser.parse_args()
 
     # 决定要操作的存档
@@ -511,7 +599,7 @@ def main():
         if not os.path.isdir(os.path.join(SAVES_DIR, save_name)):
             print(f"❌ 存档不存在: {save_name}")
             sys.exit(1)
-    elif args.all or args.money or args.attr or args.perk or args.cred or args.level:
+    elif args.all or args.money or args.attr or args.perk or args.cred or args.level or args.quickhack:
         # 命令行模式 - 用最新存档
         saves = list_saves()
         if not saves:
@@ -535,6 +623,7 @@ def main():
         args.perk = args.perk or 999
         args.cred = args.cred or 50
         args.level = args.level or 60
+        args.quickhack = args.quickhack or 999
 
     if args.money is not None:
         r, e = modify_money(savefile, args.money)
@@ -553,6 +642,11 @@ def main():
     if args.level is not None:
         r, e = modify_player_level(savefile, args.level)
         print(f"⭐ 玩家等级: {f'{r[0]} → {r[1]}' if r else '失败 - ' + e}")
+
+    if args.quickhack is not None:
+        print(f"🧩 快速破解组件 → {args.quickhack}:")
+        for c in modify_quickhack_components(savefile, args.quickhack):
+            print(c)
 
     savefile.save()
     print(f"\n✅ 已保存. 原文件备份为 backup_N.dat")

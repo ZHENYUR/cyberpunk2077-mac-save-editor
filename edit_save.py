@@ -523,6 +523,31 @@ def modify_stackable_quantity(savefile, name_str, new_qty):
     return old, new_qty
 
 
+def modify_ammo(savefile, new_qty=9999):
+    """
+    补满弹药 (Ammo. 前缀, 注意不是 Items.):
+      Ammo.HandgunAmmo      手枪弹
+      Ammo.RifleAmmo        步枪弹
+      Ammo.ShotgunAmmo      霰弹
+      Ammo.SniperRifleAmmo  狙击弹
+    弹药用 Ammo. 前缀, 标准 CRC32, 结构同 inventory item (子hash+21).
+    """
+    ammo = [
+        ('Ammo.HandgunAmmo', '手枪弹'),
+        ('Ammo.RifleAmmo', '步枪弹'),
+        ('Ammo.ShotgunAmmo', '霰弹'),
+        ('Ammo.SniperRifleAmmo', '狙击弹'),
+    ]
+    changes = []
+    for name_str, label in ammo:
+        old, res = modify_stackable_quantity(savefile, name_str, new_qty)
+        if old is None:
+            changes.append(f"  ⚠️  {label}: {res}")
+        else:
+            changes.append(f"  ✓ {label}: {old} → {res}")
+    return changes
+
+
 def modify_upgrade_components(savefile, new_qty=999):
     """
     修改武器/义体升级组件数量 (左上角 "组件", 用于升级义体/武器阶级).
@@ -596,7 +621,8 @@ def interactive_menu(save_name):
         print("  [5] 玩家等级           改成 60 (满级)")
         print("  [6] 快速破解组件       Tier 2/3/4/5 改成 999")
         print("  [7] 升级组件 (义体/武器) 白/绿/蓝/紫/橙 改成 999")
-        print("  [8] 一键全部拉满")
+        print("  [8] 弹药               全部改成 9999")
+        print("  [9] 一键全部拉满")
         print("  [0] 保存并退出")
         print("  [q] 不保存退出")
 
@@ -645,6 +671,10 @@ def interactive_menu(save_name):
             for c in modify_upgrade_components(savefile, 999):
                 print(c)
         elif choice == '8':
+            print("🔫 弹药:")
+            for c in modify_ammo(savefile, 9999):
+                print(c)
+        elif choice == '9':
             r, e = modify_money(savefile, 9_999_999)
             print(f"💰 钱: {f'{r[0]} → {r[1]}' if r else '失败 - ' + e}")
             for c in modify_dev_points(savefile, attribute_unspent=999, perk_unspent=999):
@@ -658,6 +688,9 @@ def interactive_menu(save_name):
                 print(c)
             print("🔧 升级组件:")
             for c in modify_upgrade_components(savefile, 999):
+                print(c)
+            print("🔫 弹药:")
+            for c in modify_ammo(savefile, 9999):
                 print(c)
         else:
             print("无效选择")
@@ -681,6 +714,7 @@ def main():
     parser.add_argument('--level', type=int, help='设置玩家等级 (上限 60)')
     parser.add_argument('--quickhack', type=int, help='设置快速破解组件数量 (Tier 2/3/4/5)')
     parser.add_argument('--upgrade', type=int, help='设置升级组件数量 (义体/武器, 白/绿/蓝/紫/橙)')
+    parser.add_argument('--ammo', type=int, help='设置弹药数量 (手枪/步枪/霰弹/狙击)')
     args = parser.parse_args()
 
     # 决定要操作的存档
@@ -690,7 +724,7 @@ def main():
             print(f"❌ 存档不存在: {save_name}")
             sys.exit(1)
     elif (args.all or args.money or args.attr or args.perk or args.cred
-          or args.level or args.quickhack or args.upgrade):
+          or args.level or args.quickhack or args.upgrade or args.ammo):
         # 命令行模式 - 用最新存档
         saves = list_saves()
         if not saves:
@@ -716,6 +750,7 @@ def main():
         args.level = args.level or 60
         args.quickhack = args.quickhack or 999
         args.upgrade = args.upgrade or 999
+        args.ammo = args.ammo or 9999
 
     if args.money is not None:
         r, e = modify_money(savefile, args.money)
@@ -743,6 +778,11 @@ def main():
     if args.upgrade is not None:
         print(f"🔧 升级组件 → {args.upgrade}:")
         for c in modify_upgrade_components(savefile, args.upgrade):
+            print(c)
+
+    if args.ammo is not None:
+        print(f"🔫 弹药 → {args.ammo}:")
+        for c in modify_ammo(savefile, args.ammo):
             print(c)
 
     savefile.save()

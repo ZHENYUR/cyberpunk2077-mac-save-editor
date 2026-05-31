@@ -402,9 +402,15 @@ def modify_quickhack_components(savefile, new_qty=999):
       Items.QuickHackEpicMaterial1      (Tier 4 紫)
 
     Item entry 结构 (基于实验观察):
-      [8 bytes TweakDBID hash] [4 bytes quantity uint32] [4 bytes flag] ...
-      每个 item entry 在 inventory 字节里出现两次 (主条目 + stack 引用),
-      两个位置都需要修改, 否则游戏可能用其中一个值覆盖.
+      [8 bytes TweakDBID hash]
+      [8 bytes metadata (flags/length等)]
+      [4 bytes quantity uint32]   ← 在 hash+16 位置
+      [8 bytes hash 重复]
+      [8 bytes metadata 重复]
+      [4 bytes quantity 重复]      ← 在 hash+36 位置
+    两个 quantity 位置都需要修改.
+
+    注: 用绿色 Uncommon 组件实验确认 quantity 在 hash+16 (从 82 → 999 验证成功).
 
     Tier 5 (Legendary 橙) 需要先在游戏里获得至少 1 个才能用此函数修改.
     """
@@ -449,12 +455,12 @@ def modify_quickhack_components(savefile, new_qty=999):
             changes.append(f"  ⚠️  {label}: 背包里没有, 跳过 (需先在游戏里获得 1 个)")
             continue
 
-        # 修改每个位置的 hash+4 quantity 字段
+        # 修改每个位置的 hash+16 quantity 字段
+        # (hash 出现 2 次, 第一次 +16 = quantity, 第二次 +16 = quantity 重复)
         for p in positions:
-            abs_pos = inv_info.offset + p + 4
+            abs_pos = inv_info.offset + p + 16
             old = struct.unpack('<I', data[abs_pos:abs_pos + 4])[0]
-            if old < 100000:  # sanity check
-                data[abs_pos:abs_pos + 4] = struct.pack('<I', new_qty)
+            data[abs_pos:abs_pos + 4] = struct.pack('<I', new_qty)
 
         old_first = struct.unpack(
             '<I',

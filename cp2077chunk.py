@@ -305,6 +305,21 @@ class LZ4DataChunk(DataChunk):
 
     @data.setter
     def data(self, value):
+        # Modified 2026 by ZHENYUR:
+        # Original code wrote LZ4 block as a single "literal copy" without
+        # actual compression, which makes the file ~5% larger after a save.
+        # Some game versions reject this size difference and fail to load.
+        # Use real LZ4 block compression via the lz4 library when available.
+        try:
+            import lz4.block
+            compressed = lz4.block.compress(
+                bytes(value), mode='high_compression', store_size=False
+            )
+            self[len(self.MAGIC):] = pack32(len(value)) + compressed
+            return
+        except ImportError:
+            pass
+        # Fallback: original literal-copy implementation
         length = len(value)
         res = bytearray(pack32(length))
         if length >= 15:

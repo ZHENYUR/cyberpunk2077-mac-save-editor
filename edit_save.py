@@ -394,6 +394,14 @@ def modify_player_level(savefile, new_level):
 
 def modify_quickhack_components(savefile, new_qty=999):
     """
+    ⚠️  实验性功能 - 后期存档可能损坏 ⚠️
+
+    在简单存档(早期游戏进度)上可能工作, 但在后期/复杂存档上
+    游戏会拒绝加载. 推测原因: CP2077 存档对 inventory 节点有
+    内部一致性检查, 修改单个 quantity 字段会破坏 checksum.
+
+    使用前**务必备份**, 如果游戏进不去, 用 backup_N.dat 恢复.
+
     修改 Quickhack 升级组件数量 (Tier 2 绿 / Tier 3 蓝 / Tier 4 紫).
 
     Quickhack 组件以 inventory 中的 stackable item 存储:
@@ -519,7 +527,7 @@ def interactive_menu(save_name):
         print("  [3] 专长点 (Primary)   改成 999")
         print("  [4] 街头声望           改成 50 (满级)")
         print("  [5] 玩家等级           改成 60 (满级)")
-        print("  [6] 快速破解组件       Tier 2/3/4 改成 999")
+        print("  [6] 快速破解组件       Tier 2/3/4 改成 999 ⚠️ 实验性")
         print("  [7] 一键全部拉满")
         print("  [0] 保存并退出")
         print("  [q] 不保存退出")

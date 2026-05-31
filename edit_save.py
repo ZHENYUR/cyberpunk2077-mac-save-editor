@@ -478,6 +478,78 @@ def modify_quickhack_components(savefile, new_qty=999):
     return changes
 
 
+def modify_stackable_quantity(savefile, name_str, new_qty):
+    """
+    通用: 修改 inventory 中某个可堆叠 item 的数量.
+    返回 (old, new) 或 (None, 原因).
+
+    用 验证过的 子hash+21 位置 (= 子节点 body offset 24).
+    只改 quantity 字节, 不碰 NodeId/TdbId/Header.
+    背包里不存在该 item 时返回 None (无法凭空创建).
+    """
+    import binascii
+    inv_info = None
+    for nid in range(len(savefile.nodes_info)):
+        if savefile.nodes_info[nid].name == b'inventory':
+            inv_info = savefile.nodes_info[nid]
+            break
+    if inv_info is None:
+        return None, "找不到 inventory 节点"
+
+    data = savefile.data
+    name = name_str.encode()
+    crc = binascii.crc32(name) & 0xFFFFFFFF
+    hash_bytes = struct.pack('<IB3x', crc, len(name))
+
+    inv_bytes = bytes(data[inv_info.offset:inv_info.offset + inv_info.size])
+    positions = []
+    s = 0
+    while True:
+        i = inv_bytes.find(hash_bytes, s)
+        if i < 0:
+            break
+        positions.append(i)
+        s = i + 1
+
+    if len(positions) < 2:
+        return None, "背包里没有 (需先在游戏里获得至少 1 个)"
+
+    qty_pos = inv_info.offset + positions[1] + 21
+    old = struct.unpack('<I', data[qty_pos:qty_pos + 4])[0]
+    if old > 100000:
+        return None, f"位置值 {old} 异常, 跳过保护"
+
+    data[qty_pos:qty_pos + 4] = struct.pack('<I', new_qty)
+    return old, new_qty
+
+
+def modify_upgrade_components(savefile, new_qty=999):
+    """
+    修改武器/义体升级组件数量 (左上角 "组件", 用于升级义体/武器阶级).
+      Items.CommonMaterial1     普通(白)
+      Items.UncommonMaterial1   罕见(绿)
+      Items.RareMaterial1       稀有(蓝)
+      Items.EpicMaterial1       史诗(紫)
+      Items.LegendaryMaterial1  传奇(橙) — 升级义体到 5 阶必需
+    传奇组件背包里通常没有, 需先拆解橙色装备获得 1 个.
+    """
+    comps = [
+        ('Items.CommonMaterial1', '普通(白)'),
+        ('Items.UncommonMaterial1', '罕见(绿)'),
+        ('Items.RareMaterial1', '稀有(蓝)'),
+        ('Items.EpicMaterial1', '史诗(紫)'),
+        ('Items.LegendaryMaterial1', '传奇(橙)'),
+    ]
+    changes = []
+    for name_str, label in comps:
+        old, res = modify_stackable_quantity(savefile, name_str, new_qty)
+        if old is None:
+            changes.append(f"  ⚠️  {label}: {res}")
+        else:
+            changes.append(f"  ✓ {label}: {old} → {res}")
+    return changes
+
+
 # ============================================================
 # 主程序
 # ============================================================
@@ -523,7 +595,8 @@ def interactive_menu(save_name):
         print("  [4] 街头声望           改成 50 (满级)")
         print("  [5] 玩家等级           改成 60 (满级)")
         print("  [6] 快速破解组件       Tier 2/3/4/5 改成 999")
-        print("  [7] 一键全部拉满")
+        print("  [7] 升级组件 (义体/武器) 白/绿/蓝/紫/橙 改成 999")
+        print("  [8] 一键全部拉满")
         print("  [0] 保存并退出")
         print("  [q] 不保存退出")
 
@@ -568,6 +641,10 @@ def interactive_menu(save_name):
             for c in modify_quickhack_components(savefile, 999):
                 print(c)
         elif choice == '7':
+            print("🔧 升级组件:")
+            for c in modify_upgrade_components(savefile, 999):
+                print(c)
+        elif choice == '8':
             r, e = modify_money(savefile, 9_999_999)
             print(f"💰 钱: {f'{r[0]} → {r[1]}' if r else '失败 - ' + e}")
             for c in modify_dev_points(savefile, attribute_unspent=999, perk_unspent=999):
@@ -578,6 +655,9 @@ def interactive_menu(save_name):
             print(f"⭐ 玩家等级: {f'{r[0]} → {r[1]}' if r else '失败 - ' + e}")
             print("🧩 快速破解组件:")
             for c in modify_quickhack_components(savefile, 999):
+                print(c)
+            print("🔧 升级组件:")
+            for c in modify_upgrade_components(savefile, 999):
                 print(c)
         else:
             print("无效选择")
@@ -599,7 +679,8 @@ def main():
     parser.add_argument('--perk', type=int, help='设置未用专长点数')
     parser.add_argument('--cred', type=int, help='设置街头声望 (上限 50)')
     parser.add_argument('--level', type=int, help='设置玩家等级 (上限 60)')
-    parser.add_argument('--quickhack', type=int, help='设置 Tier 2/3/4 快速破解组件数量')
+    parser.add_argument('--quickhack', type=int, help='设置快速破解组件数量 (Tier 2/3/4/5)')
+    parser.add_argument('--upgrade', type=int, help='设置升级组件数量 (义体/武器, 白/绿/蓝/紫/橙)')
     args = parser.parse_args()
 
     # 决定要操作的存档
@@ -608,7 +689,8 @@ def main():
         if not os.path.isdir(os.path.join(SAVES_DIR, save_name)):
             print(f"❌ 存档不存在: {save_name}")
             sys.exit(1)
-    elif args.all or args.money or args.attr or args.perk or args.cred or args.level or args.quickhack:
+    elif (args.all or args.money or args.attr or args.perk or args.cred
+          or args.level or args.quickhack or args.upgrade):
         # 命令行模式 - 用最新存档
         saves = list_saves()
         if not saves:
@@ -633,6 +715,7 @@ def main():
         args.cred = args.cred or 50
         args.level = args.level or 60
         args.quickhack = args.quickhack or 999
+        args.upgrade = args.upgrade or 999
 
     if args.money is not None:
         r, e = modify_money(savefile, args.money)
@@ -655,6 +738,11 @@ def main():
     if args.quickhack is not None:
         print(f"🧩 快速破解组件 → {args.quickhack}:")
         for c in modify_quickhack_components(savefile, args.quickhack):
+            print(c)
+
+    if args.upgrade is not None:
+        print(f"🔧 升级组件 → {args.upgrade}:")
+        for c in modify_upgrade_components(savefile, args.upgrade):
             print(c)
 
     savefile.save()
